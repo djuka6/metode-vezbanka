@@ -305,6 +305,81 @@
       background: white;
     }
 
+    .search-wrapper {
+      position: relative;
+      margin-bottom: 16px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--panel-light);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+    }
+
+    .search-input::placeholder {
+      color: var(--muted);
+    }
+
+    .suggestions-list {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      z-index: 100;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+
+    .suggestions-list.open {
+      display: block;
+    }
+
+    .suggestion-item {
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      line-height: 1.45;
+    }
+
+    .suggestion-item:last-child {
+      border-bottom: none;
+    }
+
+    .suggestion-item:hover,
+    .suggestion-item.active {
+      background: rgba(37, 99, 235, 0.25);
+      color: #bfdbfe;
+    }
+
+    .suggestion-highlight {
+      color: #60a5fa;
+      font-weight: 700;
+    }
+
+    .suggestions-empty {
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      font-style: italic;
+    }
+
     @media (max-width: 860px) {
       .layout {
         grid-template-columns: 1fr;
@@ -321,6 +396,18 @@
     <main class="layout">
       <aside class="card sidebar">
         <h2 class="section-title">Kontrole</h2>
+
+        <label for="questionSearch">Pretraži pitanja</label>
+        <div class="search-wrapper">
+          <input
+            type="text"
+            id="questionSearch"
+            class="search-input"
+            placeholder="Upiši ključnu reč…"
+            autocomplete="off"
+          />
+          <div id="suggestionsList" class="suggestions-list"></div>
+        </div>
 
         <label for="areaFilter">Oblast</label>
         <select id="areaFilter"></select>
@@ -1091,6 +1178,10 @@
     const modalImage = document.getElementById('modalImage');
     const modalTitle = document.getElementById('modalTitle');
 
+    const questionSearch = document.getElementById('questionSearch');
+    const suggestionsList = document.getElementById('suggestionsList');
+    let activeIndex = -1;
+
     let currentQuestion = null;
     let shownQuestionIds = new Set();
 
@@ -1241,6 +1332,114 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && imageModal.classList.contains('open')) {
         closeImageModal();
+      }
+    });
+
+    const DIAC_MAP = {
+      'č': 'c', 'ć': 'c', 'š': 's', 'ž': 'z', 'đ': 'd',
+      'Č': 'C', 'Ć': 'C', 'Š': 'S', 'Ž': 'Z', 'Đ': 'D'
+    };
+
+    function stripDiacritics(str) {
+      return str.replace(/[čćšžđČĆŠŽĐ]/g, ch => DIAC_MAP[ch] || ch);
+    }
+
+    function escapeRegex(str) {
+      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function highlight(text, query) {
+      if (!query) return text;
+      // Build a pattern that matches both accented and unaccented variants
+      const pattern = query.replace(/[čćšžđČĆŠŽĐcsdz]/gi, ch => {
+        const base = stripDiacritics(ch.toLowerCase());
+        const map = { c: '[cčć]', s: '[sš]', z: '[zž]', d: '[dđ]' };
+        const repl = map[base] || escapeRegex(ch);
+        return repl;
+      });
+      const re = new RegExp('(' + pattern + ')', 'gi');
+      return text.replace(re, '<span class="suggestion-highlight">$1</span>');
+    }
+
+    function closeSuggestions() {
+      suggestionsList.classList.remove('open');
+      activeIndex = -1;
+    }
+
+    function renderSuggestions(query) {
+      suggestionsList.innerHTML = '';
+      activeIndex = -1;
+
+      if (!query.trim()) {
+        closeSuggestions();
+        return;
+      }
+
+      const normalizedQuery = stripDiacritics(query.toLowerCase());
+      const matches = svaPitanja.filter(q =>
+        stripDiacritics(q.pitanje.toLowerCase()).includes(normalizedQuery)
+      ).slice(0, 8);
+
+      if (matches.length === 0) {
+        suggestionsList.innerHTML = '<div class="suggestions-empty">Nema rezultata.</div>';
+        suggestionsList.classList.add('open');
+        return;
+      }
+
+      matches.forEach((q, i) => {
+        const item = document.createElement('div');
+        item.className = 'suggestion-item';
+        item.innerHTML = highlight(q.pitanje, query);
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          loadQuestion(q);
+          questionSearch.value = '';
+          closeSuggestions();
+        });
+        suggestionsList.appendChild(item);
+      });
+
+      suggestionsList.classList.add('open');
+    }
+
+    function loadQuestion(question) {
+      currentQuestion = question;
+      shownQuestionIds.add(question.id);
+      renderQuestion(question);
+      updateStats();
+    }
+
+    questionSearch.addEventListener('input', () => {
+      renderSuggestions(questionSearch.value);
+    });
+
+    questionSearch.addEventListener('keydown', (e) => {
+      const items = suggestionsList.querySelectorAll('.suggestion-item');
+      if (!items.length) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIndex = (activeIndex + 1) % items.length;
+        items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIndex = (activeIndex - 1 + items.length) % items.length;
+        items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+      } else if (e.key === 'Enter' && activeIndex >= 0) {
+        e.preventDefault();
+        items[activeIndex].dispatchEvent(new MouseEvent('mousedown'));
+      } else if (e.key === 'Escape') {
+        closeSuggestions();
+      }
+    });
+
+    questionSearch.addEventListener('blur', () => {
+      setTimeout(closeSuggestions, 150);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!questionSearch.contains(e.target) && !suggestionsList.contains(e.target)) {
+        closeSuggestions();
       }
     });
 
